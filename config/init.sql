@@ -98,3 +98,4 @@ CREATE INDEX IF NOT EXISTS idx_balance_quiz ON balance_items(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_personality_quiz ON personality_questions(quiz_id);
 CREATE INDEX IF NOT EXISTS idx_results_quiz ON quiz_results(quiz_id);
 
+
