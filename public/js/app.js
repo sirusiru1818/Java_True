@@ -41,6 +41,7 @@
             
             if (id === 'home' || id === 'home-page') {
                 fetchQuizzes();
+                // 필터는 fetchQuizzes 내부에서 applyFilters()를 호출하므로 여기서는 호출하지 않음
             }
             
             if (id === 'create' && document.querySelectorAll('.question-item').length === 0) {
@@ -60,15 +61,23 @@
                 if(data.success) {
                     allQuizzes = data.quizzes || [];
                     console.log(`✅ 퀴즈 ${allQuizzes.length}개 로드됨`);
-                    renderQuizzes(allQuizzes);
+                    console.log('📋 카테고리 분포:', allQuizzes.reduce((acc, q) => {
+                        acc[q.category || 'null'] = (acc[q.category || 'null'] || 0) + 1;
+                        return acc;
+                    }, {}));
+                    applyFilters(); // 필터 적용
                 } else if(Array.isArray(data)) {
                     allQuizzes = data;
                     console.log(`✅ 퀴즈 ${allQuizzes.length}개 로드됨 (배열 형식)`);
-                    renderQuizzes(allQuizzes);
+                    console.log('📋 카테고리 분포:', allQuizzes.reduce((acc, q) => {
+                        acc[q.category || 'null'] = (acc[q.category || 'null'] || 0) + 1;
+                        return acc;
+                    }, {}));
+                    applyFilters(); // 필터 적용
                 } else {
                     allQuizzes = [];
                     console.warn('⚠️  예상치 못한 응답 형식:', data);
-                    renderQuizzes(allQuizzes);
+                    applyFilters(); // 필터 적용
                 }
             } catch(e) {
                 console.error('❌ 퀴즈 로드 오류:', e);
@@ -105,9 +114,24 @@
             }
         }
         
-        // 전역에서 사용 가능하도록
+        // 전역에서 사용 가능하도록 (HTML onclick 핸들러용)
         window.checkDBStatus = checkDBStatus;
         window.fetchQuizzes = fetchQuizzes;
+        window.showPage = showPage;
+        window.filterCategory = filterCategory;
+        window.goToLogin = goToLogin;
+        window.handleLogout = handleLogout;
+        window.addQuestion = addQuestion;
+        window.submitQuiz = submitQuiz;
+        window.checkId = checkId;
+        window.handleAuth = handleAuth;
+        window.toggleFindMode = toggleFindMode;
+        window.handleFindAccount = handleFindAccount;
+        window.startRealQuiz = startRealQuiz;
+        window.selectCount = selectCount;
+        window.changeCategory = changeCategory;
+        window.removeQuestion = removeQuestion;
+        window.prepareQuiz = prepareQuiz;
         
         function renderQuizzes(list) {
             const grid = document.getElementById('quiz-grid');
@@ -651,14 +675,16 @@
             applyFilters(); 
         }
         function applyFilters() { 
-            const k=document.getElementById('search-input').value.toLowerCase(); 
-            const f=allQuizzes.filter(q=>{ 
-                const c=activeCategory==='all'||q.category===activeCategory; 
-                const t=q.title.toLowerCase().includes(k); 
-                return c&&t; 
+            const searchInput = document.getElementById('search-input');
+            const k = searchInput ? searchInput.value.toLowerCase() : ''; 
+            const f = allQuizzes.filter(q=>{ 
+                // 카테고리 필터링: activeCategory가 'all'이거나 퀴즈의 category와 일치해야 함
+                const categoryMatch = activeCategory === 'all' || (q.category && q.category === activeCategory);
+                // 검색어 필터링: 제목에 검색어가 포함되어야 함
+                const titleMatch = !k || (q.title && q.title.toLowerCase().includes(k));
+                return categoryMatch && titleMatch; 
             }); 
+            console.log(`🔍 필터링 결과: ${f.length}개 (카테고리: ${activeCategory}, 검색어: "${k}")`);
             renderQuizzes(f); 
         }
         document.getElementById('search-input')?.addEventListener('input', applyFilters);
-
-    </script>

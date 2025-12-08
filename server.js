@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 const session = require('express-session');
 const pool = require('./config/database');
 
@@ -437,13 +438,17 @@ app.get('/api/quiz/:id/questions', async (req, res) => {
 // 데이터베이스 초기화 (개발용)
 app.post('/api/init-db', async (req, res) => {
   try {
-    const fs = require('fs');
+    // 1) 스키마 초기화
     const sql = fs.readFileSync(path.join(__dirname, 'config', 'init.sql'), 'utf8');
     await pool.query(sql);
-    res.json({ success: true, message: '데이터베이스 초기화 완료' });
+
+    // 2) 샘플 데이터 채우기
+    await seedSampleData();
+
+    res.json({ success: true, message: '데이터베이스 초기화 및 샘플 데이터 삽입 완료' });
   } catch (error) {
     console.error('DB 초기화 오류:', error);
-    res.status(500).json({ error: '데이터베이스 초기화 실패', details: error.message });
+    res.status(500).json({ error: '데이터베이스 초기화/샘플 데이터 삽입 실패', details: error.message });
   }
 });
 
@@ -528,6 +533,298 @@ app.get('/api/db-schema/:table', async (req, res) => {
     });
   }
 });
+
+// 샘플 데이터 삽입 (개발용)
+async function seedSampleData() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 기존 퀴즈 관련 데이터 정리 (users 는 유지)
+    await client.query(`
+      DO $$
+      BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'quiz_results') THEN
+          EXECUTE 'TRUNCATE TABLE quiz_results RESTART IDENTITY CASCADE';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'personality_questions') THEN
+          EXECUTE 'TRUNCATE TABLE personality_questions RESTART IDENTITY CASCADE';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'balance_items') THEN
+          EXECUTE 'TRUNCATE TABLE balance_items RESTART IDENTITY CASCADE';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'worldcup_candidates') THEN
+          EXECUTE 'TRUNCATE TABLE worldcup_candidates RESTART IDENTITY CASCADE';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'options') THEN
+          EXECUTE 'TRUNCATE TABLE options RESTART IDENTITY CASCADE';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'questions') THEN
+          EXECUTE 'TRUNCATE TABLE questions RESTART IDENTITY CASCADE';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'quizzes') THEN
+          EXECUTE 'TRUNCATE TABLE quizzes RESTART IDENTITY CASCADE';
+        END IF;
+      END
+      $$;
+    `);
+
+    // users 테이블 컬럼 확인
+    const userColsRes = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'users'
+    `);
+    const userCols = userColsRes.rows.map(r => r.column_name);
+
+    let userId = null;
+    if (userCols.length > 0) {
+      if (userCols.includes('password_hash')) {
+        // 새 스키마 (email, password_hash, username)
+        const result = await client.query(
+          `INSERT INTO users (email, password_hash, username)
+           VALUES ($1, $2, $3)
+           RETURNING id`,
+          ['demo@example.com', 'demo1234', '데모유저']
+        );
+        userId = result.rows[0].id;
+      } else if (userCols.includes('password')) {
+        // 기존 스키마 (email, username, password[, nickname])
+        const hasNickname = userCols.includes('nickname');
+        const cols = ['email', 'username', 'password'].concat(hasNickname ? ['nickname'] : []);
+        const values = ['demo@example.com', 'demo', 'demo1234'].concat(hasNickname ? ['데모유저'] : []);
+        const placeholders = cols.map((_, i) => `$${i + 1}`).join(', ');
+        const sql = `INSERT INTO users (${cols.join(', ')}) VALUES (${placeholders}) RETURNING id`;
+        const result = await client.query(sql, values);
+        userId = result.rows[0].id;
+      }
+    }
+
+    // quizzes 테이블 컬럼 확인
+    const quizColsRes = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'quizzes'
+    `);
+    const quizCols = quizColsRes.rows.map(r => r.column_name);
+
+    const baseQuizCols = ['title', 'description', 'category'];
+    if (quizCols.includes('creator_id') && userId) {
+      baseQuizCols.push('creator_id');
+    }
+    const quizPlaceholders = baseQuizCols.map((_, i) => `$${i + 1}`).join(', ');
+    const insertQuizSql = `INSERT INTO quizzes (${baseQuizCols.join(', ')}) VALUES (${quizPlaceholders}) RETURNING id`;
+
+    // 샘플 퀴즈 4개 (normal, worldcup, balance, test)
+    const sampleQuizzes = [
+      {
+        title: '일반 퀴즈 샘플 - 세계 수도 맞추기',
+        description: '세계 주요 국가의 수도를 맞춰보는 기본 퀴즈입니다.',
+        category: 'normal'
+      },
+      {
+        title: '치킨 브랜드 월드컵',
+        description: '나의 최애 치킨 브랜드를 골라보세요.',
+        category: 'worldcup'
+      },
+      {
+        title: '밸런스 게임 샘플',
+        description: '둘 중 하나만 선택해야 한다면?',
+        category: 'balance'
+      },
+      {
+        title: '성격 테스트 샘플',
+        description: '간단한 4문항 성격 유형 테스트입니다.',
+        category: 'test'
+      }
+    ];
+
+    const quizIds = {};
+    for (const q of sampleQuizzes) {
+      const params = [q.title, q.description, q.category];
+      if (baseQuizCols.includes('creator_id')) {
+        params.push(userId);
+      }
+      const result = await client.query(insertQuizSql, params);
+      quizIds[q.category] = result.rows[0].id;
+    }
+
+    // questions 테이블 컬럼 확인 (question_text vs content)
+    const qColsRes = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'questions'
+    `);
+    const qCols = qColsRes.rows.map(r => r.column_name);
+    const questionTextCol = qCols.includes('question_text')
+      ? 'question_text'
+      : (qCols.includes('content') ? 'content' : null);
+    const hasCorrectAnswerCol = qCols.includes('correct_answer');
+
+    if (questionTextCol) {
+      // 일반 퀴즈 샘플 문제
+      const normalQuizId = quizIds['normal'];
+
+      // questions 테이블 구조에 따라 INSERT 컬럼 구성
+      const insertQuestionSql = hasCorrectAnswerCol
+        ? `
+          INSERT INTO questions (quiz_id, ${questionTextCol}, image_url, correct_answer, question_order)
+          VALUES ($1, $2, $3, $4, $5)
+        `
+        : `
+          INSERT INTO questions (quiz_id, ${questionTextCol}, image_url, question_order)
+          VALUES ($1, $2, $3, $4)
+        `;
+
+      const insertOptionSql = `
+        INSERT INTO options (question_id, option_text, option_order)
+        VALUES ($1, $2, $3)
+      `;
+
+      const normalQuestions = [
+        {
+          text: '대한민국의 수도는 어디일까요?',
+          options: ['서울', '부산', '인천', '대구'],
+          correctIndex: 0
+        },
+        {
+          text: '일본의 수도는 어디일까요?',
+          options: ['오사카', '도쿄', '교토', '나고야'],
+          correctIndex: 1
+        },
+        {
+          text: '프랑스의 수도는 어디일까요?',
+          options: ['마르세유', '리옹', '니스', '파리'],
+          correctIndex: 3
+        }
+      ];
+
+      let order = 1;
+      for (const nq of normalQuestions) {
+        const params = hasCorrectAnswerCol
+          ? [normalQuizId, nq.text, null, nq.correctIndex, order++]
+          : [normalQuizId, nq.text, null, order++];
+
+        const qRes = await client.query(insertQuestionSql, params);
+        const questionId = qRes.rows?.[0]?.id || null;
+
+        if (questionId) {
+          let optOrder = 0;
+          for (const opt of nq.options) {
+            await client.query(insertOptionSql, [questionId, opt, optOrder++]);
+          }
+        }
+      }
+    }
+
+    // 월드컵 후보 샘플
+    const wcColsRes = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'worldcup_candidates'
+    `);
+    if (wcColsRes.rows.length > 0) {
+      const worldcupId = quizIds['worldcup'];
+      const insertCandidateSql = `
+        INSERT INTO worldcup_candidates (quiz_id, name, image_url, candidate_order)
+        VALUES ($1, $2, $3, $4)
+      `;
+      const candidates = [
+        { name: 'BBQ 황금올리브', image_url: null },
+        { name: 'BHC 뿌링클', image_url: null },
+        { name: '교촌 오리지널', image_url: null },
+        { name: '네네 치즈볼 세트', image_url: null }
+      ];
+      let order = 1;
+      for (const c of candidates) {
+        await client.query(insertCandidateSql, [worldcupId, c.name, c.image_url, order++]);
+      }
+    }
+
+    // 밸런스 게임 샘플
+    const balColsRes = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'balance_items'
+    `);
+    if (balColsRes.rows.length > 0) {
+      const balanceId = quizIds['balance'];
+      const insertBalanceSql = `
+        INSERT INTO balance_items (quiz_id, option_a, option_b, image_a_url, image_b_url, item_order)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `;
+      const items = [
+        { a: '평생 치킨 무제한', b: '평생 피자 무제한' },
+        { a: '하루 4시간만 수면', b: '하루 4시간만 자유시간' },
+        { a: '과거로 돌아가기', b: '미래로 순간이동' }
+      ];
+      let order = 1;
+      for (const it of items) {
+        await client.query(
+          insertBalanceSql,
+          [balanceId, it.a, it.b, null, null, order++]
+        );
+      }
+    }
+
+    // 성격 테스트 샘플
+    const persColsRes = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = 'public' AND table_name = 'personality_questions'
+    `);
+    if (persColsRes.rows.length > 0) {
+      const testId = quizIds['test'];
+      const insertPersSql = `
+        INSERT INTO personality_questions
+          (quiz_id, question_text, option_a, option_b, type_a, type_b, question_order)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `;
+      const items = [
+        {
+          q: '주말에 나는?',
+          a: '집에서 쉬는 편이다',
+          b: '밖에 나가 사람들을 만난다',
+          ta: 'I', tb: 'E'
+        },
+        {
+          q: '일을 할 때 나는?',
+          a: '계획을 세우고 차근차근 진행한다',
+          b: '즉흥적으로 유연하게 움직인다',
+          ta: 'J', tb: 'P'
+        },
+        {
+          q: '갈등 상황에서 나는?',
+          a: '논리적으로 판단하려 한다',
+          b: '상대의 감정을 우선한다',
+          ta: 'T', tb: 'F'
+        },
+        {
+          q: '새로운 사람을 만날 때 나는?',
+          a: '먼저 말을 잘 거는 편이 아니다',
+          b: '먼저 말을 거는 편이다',
+          ta: 'I', tb: 'E'
+        }
+      ];
+      let order = 1;
+      for (const it of items) {
+        await client.query(
+          insertPersSql,
+          [testId, it.q, it.a, it.b, it.ta, it.tb, order++]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+    console.log('✅ 샘플 데이터 삽입 완료');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('❌ 샘플 데이터 삽입 오류:', err);
+    throw err;
+  } finally {
+    client.release();
+  }
+}
 
 // 마추기 카테고리 지원을 위한 questions 테이블에 content 컬럼 추가 확인
 // (기존 question_text와 호환)
