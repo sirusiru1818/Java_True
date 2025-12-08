@@ -1,0 +1,5 @@
+DB 인스턴스 ID : machugi-db
+
+엔드포인트 : machugi-db.cniigc2sgexq.ap-south-1.rds.amazonaws.com
+
+비번 : qwer1234
