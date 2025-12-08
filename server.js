@@ -16,7 +16,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname)));
 app.use(express.static(path.join(__dirname, 'public'))); // public 폴더 정적 파일 서빙
-app.use(express.static(path.join(__dirname, '마추기', 'public'))); // 마추기 폴더의 이미지
+app.use(express.static(path.join(__dirname, '마추기', 'public'))); // 마추기 폴더의 이미지 (하위 호환)
 
 app.use(session({
   secret: process.env.SESSION_SECRET || 'machugi_secret_key',
@@ -27,7 +27,7 @@ app.use(session({
 
 // 정적 파일 제공 (index.html)
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, 'index.html'));
+  res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
 // ==================== API 라우트 ====================
