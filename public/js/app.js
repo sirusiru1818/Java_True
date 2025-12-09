@@ -29,7 +29,7 @@
 
         /* 1. 페이지 네비게이션 */
         function showPage(id) {
-            const pages = ['home-page','create-page','login-page','play-page','result-page','select-count-page','admin-page'];
+            const pages = ['home-page','create-page','login-page','play-page','result-page','select-count-page','admin-page','stats-page'];
             pages.forEach(p => {
                 const el = document.getElementById(p);
                 if(el) el.classList.add('hidden');
@@ -46,6 +46,10 @@
             
             if (id === 'create' && document.querySelectorAll('.question-item').length === 0) {
                 changeCategory();
+            }
+            
+            if (id === 'stats' || id === 'stats-page') {
+                renderStats();
             }
         }
         
@@ -121,6 +125,8 @@
         window.filterCategory = filterCategory;
         window.goToLogin = goToLogin;
         window.handleLogout = handleLogout;
+        window.clearStats = clearStats;
+        window.renderStats = renderStats;
         window.addQuestion = addQuestion;
         window.submitQuiz = submitQuiz;
         window.checkId = checkId;
@@ -617,13 +623,9 @@
             
             if(currentQuiz.category === 'machugi') {
                 const imgUrl = q.image_url ? `${API_BASE}${q.image_url}` : 'https://via.placeholder.com/400x300?text=Guess+Who';
-                
-                let questionText = "이 캐릭터/인물의 이름은?";
-                if(currentQuiz.id === 6) questionText = "이 국기는 어느 나라일까요?"; 
 
                 con.innerHTML = `
                     <img src="${imgUrl}" class="quiz-image">
-                    <h2 class="quiz-question">${questionText}</h2>
                     <div class="machugi-input-container">
                         <input type="text" id="answerInput" class="machugi-input" placeholder="정답을 입력하세요" autocomplete="off" onkeydown="if(event.key === 'Enter') checkMachugiAnswer()">
                         <button class="machugi-btn" onclick="checkMachugiAnswer()">제출</button>
@@ -751,6 +753,7 @@
                             <div id="recent-container"></div>
                             <div class="recent-actions">
                                 <button class="btn btn-outline" onclick="clearStats()">기록 초기화</button>
+                                <button class="btn btn-primary" onclick="showPage('stats')" style="margin-left:10px;">전체 통계 보기</button>
                             </div>
                         </div>
                         <button class="submit-btn" style="margin-top:20px;" onclick="showPage('home')">메인으로 돌아가기</button>
@@ -759,6 +762,8 @@
                 renderStats();
             } 
             else if (currentQuiz.category === 'balance') {
+                const total = normalState.questions.length;
+                saveStats({ title: currentQuiz.title, correct: 0, total: total, ts: Date.now() });
                 wrapper.innerHTML = `
                     <div class="form-container simple-result-container">
                         <span class="result-icon" style="font-size: 50px;">⚖️</span>
@@ -766,11 +771,32 @@
                         <div class="simple-result-desc">
                             모든 문제를 완료했습니다.
                         </div>
+                        <button class="btn btn-primary" onclick="showPage('stats')" style="margin-bottom:10px;">통계 보기</button>
+                        <button class="submit-btn" onclick="showPage('home')">메인으로 돌아가기</button>
+                    </div>
+                `;
+            } else if (currentQuiz.category === 'normal') {
+                const total = normalState.questions.length;
+                const correct = normalState.score;
+                saveStats({ title: currentQuiz.title, correct: correct, total: total, ts: Date.now() });
+                wrapper.innerHTML = `
+                    <div class="form-container simple-result-container">
+                        <span class="result-icon" style="font-size: 50px;">📊</span>
+                        <h2 class="page-title">결과</h2>
+                        <div class="simple-result-score">${correct} / ${total}</div>
+                        <div class="simple-result-desc">정답률: ${percent(correct, total)}%</div>
+                        <button class="btn btn-primary" onclick="showPage('stats')" style="margin-bottom:10px;">통계 보기</button>
                         <button class="submit-btn" onclick="showPage('home')">메인으로 돌아가기</button>
                     </div>
                 `;
             } else {
-                wrapper.innerHTML = `<div class="form-container"><h2 class="page-title">완료</h2><button class="submit-btn" onclick="showPage('home')">홈으로</button></div>`;
+                wrapper.innerHTML = `
+                    <div class="form-container">
+                        <h2 class="page-title">완료</h2>
+                        <button class="btn btn-primary" onclick="showPage('stats')" style="margin-bottom:10px;">통계 보기</button>
+                        <button class="submit-btn" onclick="showPage('home')">홈으로</button>
+                    </div>
+                `;
             }
         }
         
@@ -780,21 +806,60 @@
             list.forEach(it => { total += (it.total||0); correct += (it.correct||0); });
             const p = percent(correct,total); const g = gradeByPercent(p);
             
-            if(document.getElementById('stat-correct')) {
-                document.getElementById('stat-correct').innerText = String(correct);
-                document.getElementById('stat-total').innerText = `전체 ${total}문제`;
-                document.getElementById('stat-percent').innerText = String(p);
-                document.getElementById('stat-bar').style.width = p + '%';
-                const ge = document.getElementById('stat-grade');
-                ge.innerText = g; ge.className = 'grade-badge grade-' + g; 
-                document.getElementById('stat-grade-text').innerText = gradeText(g);
+            // 통계 페이지용
+            const statCorrectEl = document.getElementById('stat-correct');
+            if(statCorrectEl) {
+                statCorrectEl.innerText = String(correct);
+                const statTotalEl = document.getElementById('stat-total');
+                if(statTotalEl) statTotalEl.innerText = `전체 ${total}문제`;
+                const statPercentEl = document.getElementById('stat-percent');
+                if(statPercentEl) statPercentEl.innerText = String(p);
+                const statBarEl = document.getElementById('stat-bar');
+                if(statBarEl) statBarEl.style.width = p + '%';
+                const statGradeEl = document.getElementById('stat-grade');
+                if(statGradeEl) {
+                    statGradeEl.innerText = g;
+                    statGradeEl.className = 'grade-badge grade-' + g;
+                }
+                const statGradeTextEl = document.getElementById('stat-grade-text');
+                if(statGradeTextEl) statGradeTextEl.innerText = gradeText(g);
 
                 const recent = list.slice(-10).reverse();
                 const rc = document.getElementById('recent-container');
-                rc.innerHTML = recent.map(it => {
-                    const d = new Date(it.ts || Date.now()); const pc = percent(it.correct, it.total);
-                    return `<div class="recent-row"><div>${d.toLocaleDateString()}<br><span style="color:#adb5bd">${d.toLocaleTimeString()}</span></div><div>${escapeHtml(it.title||'퀴즈')}</div><div>${it.correct}/${it.total}</div><div>${pc}%</div></div>`;
-                }).join('') || `<div class="recent-row" style="color:#868e96; display:flex; justify-content:center; grid-template-columns:1fr;">아직 기록이 없습니다.</div>`;
+                if(rc) {
+                    rc.innerHTML = recent.map(it => {
+                        const d = new Date(it.ts || Date.now()); const pc = percent(it.correct, it.total);
+                        return `<div class="recent-row"><div>${d.toLocaleDateString()}<br><span style="color:#adb5bd">${d.toLocaleTimeString()}</span></div><div>${escapeHtml(it.title||'퀴즈')}</div><div>${it.correct}/${it.total}</div><div>${pc}%</div></div>`;
+                    }).join('') || `<div class="recent-row" style="color:#868e96; display:flex; justify-content:center; grid-template-columns:1fr;">아직 기록이 없습니다.</div>`;
+                }
+            }
+            
+            // 결과 페이지용 (하위 호환)
+            const resultStatCorrectEl = document.querySelector('#result-content-wrapper #stat-correct');
+            if(resultStatCorrectEl) {
+                resultStatCorrectEl.innerText = String(correct);
+                const resultStatTotalEl = document.querySelector('#result-content-wrapper #stat-total');
+                if(resultStatTotalEl) resultStatTotalEl.innerText = `전체 ${total}문제`;
+                const resultStatPercentEl = document.querySelector('#result-content-wrapper #stat-percent');
+                if(resultStatPercentEl) resultStatPercentEl.innerText = String(p);
+                const resultStatBarEl = document.querySelector('#result-content-wrapper #stat-bar');
+                if(resultStatBarEl) resultStatBarEl.style.width = p + '%';
+                const resultStatGradeEl = document.querySelector('#result-content-wrapper #stat-grade');
+                if(resultStatGradeEl) {
+                    resultStatGradeEl.innerText = g;
+                    resultStatGradeEl.className = 'grade-badge grade-' + g;
+                }
+                const resultStatGradeTextEl = document.querySelector('#result-content-wrapper #stat-grade-text');
+                if(resultStatGradeTextEl) resultStatGradeTextEl.innerText = gradeText(g);
+
+                const recent = list.slice(-10).reverse();
+                const resultRc = document.querySelector('#result-content-wrapper #recent-container');
+                if(resultRc) {
+                    resultRc.innerHTML = recent.map(it => {
+                        const d = new Date(it.ts || Date.now()); const pc = percent(it.correct, it.total);
+                        return `<div class="recent-row"><div>${d.toLocaleDateString()}<br><span style="color:#adb5bd">${d.toLocaleTimeString()}</span></div><div>${escapeHtml(it.title||'퀴즈')}</div><div>${it.correct}/${it.total}</div><div>${pc}%</div></div>`;
+                    }).join('') || `<div class="recent-row" style="color:#868e96; display:flex; justify-content:center; grid-template-columns:1fr;">아직 기록이 없습니다.</div>`;
+                }
             }
         }
 

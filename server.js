@@ -3,6 +3,7 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const session = require('express-session');
+const multer = require('multer');
 const pool = require('./config/database');
 
 const app = express();
@@ -13,8 +14,15 @@ app.use(cors({
   origin: ['http://127.0.0.1:5500', 'http://localhost:5500', 'http://localhost:3000'],
   credentials: true
 }));
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' })); // 이미지 업로드를 위해 크기 제한 증가
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// multer 설정 (메모리 스토리지 - DB에 직접 저장)
+const storage = multer.memoryStorage();
+const upload = multer({ 
+  storage: storage,
+  limits: { fileSize: 10 * 1024 * 1024 } // 10MB 제한
+});
 
 // 간단 요청 로거 (개발용)
 app.use((req, res, next) => {
@@ -47,6 +55,48 @@ app.use(session({
 // 정적 파일 제공 (index.html)
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// 이미지 조회 API (BYTEA에서 이미지 반환)
+app.get('/api/images/:type/:id', async (req, res) => {
+  try {
+    const { type, id } = req.params;
+    let query, column;
+    
+    if (type === 'question') {
+      query = 'SELECT image_data FROM questions WHERE id = $1';
+      column = 'image_data';
+    } else if (type === 'worldcup') {
+      query = 'SELECT image_data FROM worldcup_candidates WHERE id = $1';
+      column = 'image_data';
+    } else if (type === 'balance_a') {
+      query = 'SELECT image_a_data FROM balance_items WHERE id = $1';
+      column = 'image_a_data';
+    } else if (type === 'balance_b') {
+      query = 'SELECT image_b_data FROM balance_items WHERE id = $1';
+      column = 'image_b_data';
+    } else if (type === 'quiz_thumbnail') {
+      query = 'SELECT thumbnail_data FROM quizzes WHERE id = $1';
+      column = 'thumbnail_data';
+    } else {
+      return res.status(400).json({ error: 'Invalid image type' });
+    }
+    
+    const result = await pool.query(query, [id]);
+    
+    if (result.rows.length === 0 || !result.rows[0][column]) {
+      return res.status(404).json({ error: 'Image not found' });
+    }
+    
+    const imageData = result.rows[0][column];
+    
+    // 이미지 타입 감지 (기본값: jpeg)
+    res.setHeader('Content-Type', 'image/jpeg');
+    res.send(imageData);
+  } catch (error) {
+    console.error('이미지 조회 오류:', error);
+    res.status(500).json({ error: '이미지를 불러올 수 없습니다.' });
+  }
 });
 
 // ==================== API 라우트 ====================
@@ -220,28 +270,51 @@ app.post('/api/quizzes', async (req, res) => {
       // 마추기: questions 테이블에 저장 (이미지 + 정답)
       for (let i = 0; i < questions.length; i++) {
         const q = questions[i];
+        // base64 이미지를 Buffer로 변환
+        let imageData = null;
+        if (q.image_data) {
+          // base64 문자열을 Buffer로 변환
+          imageData = Buffer.from(q.image_data.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        }
+        
         await pool.query(
-          `INSERT INTO questions (quiz_id, content, image_url, question_order)
-           VALUES ($1, $2, $3, $4)`,
-          [quizId, q.content || q.question_text || '', q.image_url || null, i + 1]
+          `INSERT INTO questions (quiz_id, content, image_url, image_data, question_order)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [quizId, q.content || q.question_text || '', q.image_url || null, imageData, i + 1]
         );
       }
     } else if (category === 'worldcup' && questions) {
       for (let i = 0; i < questions.length; i++) {
         const c = questions[i];
+        // base64 이미지를 Buffer로 변환
+        let imageData = null;
+        if (c.image_data) {
+          imageData = Buffer.from(c.image_data.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        }
+        
         await pool.query(
-          `INSERT INTO worldcup_candidates (quiz_id, name, image_url, candidate_order)
-           VALUES ($1, $2, $3, $4)`,
-          [quizId, c.name, c.image_url || null, i + 1]
+          `INSERT INTO worldcup_candidates (quiz_id, name, image_url, image_data, candidate_order)
+           VALUES ($1, $2, $3, $4, $5)`,
+          [quizId, c.name, c.image_url || null, imageData, i + 1]
         );
       }
     } else if (category === 'balance' && questions) {
       for (let i = 0; i < questions.length; i++) {
         const b = questions[i];
+        // base64 이미지를 Buffer로 변환
+        let imageAData = null;
+        let imageBData = null;
+        if (b.image_a_data) {
+          imageAData = Buffer.from(b.image_a_data.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        }
+        if (b.image_b_data) {
+          imageBData = Buffer.from(b.image_b_data.replace(/^data:image\/\w+;base64,/, ''), 'base64');
+        }
+        
         await pool.query(
-          `INSERT INTO balance_items (quiz_id, option_a, option_b, image_a_url, image_b_url, item_order)
-           VALUES ($1, $2, $3, $4, $5, $6)`,
-          [quizId, b.option_a, b.option_b, b.image_a_url || null, b.image_b_url || null, i + 1]
+          `INSERT INTO balance_items (quiz_id, option_a, option_b, image_a_url, image_b_url, image_a_data, image_b_data, item_order)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [quizId, b.option_a, b.option_b, b.image_a_url || null, b.image_b_url || null, imageAData, imageBData, i + 1]
         );
       }
     } else if (category === 'test' && questions) {
@@ -503,32 +576,50 @@ app.get('/api/quiz/:id/questions', async (req, res) => {
     // 마추기 폴더 형식에 맞게 변환
     const questions = result.rows.map(q => {
       if (category === 'machugi') {
+        // DB에 이미지가 있으면 이미지 API URL 사용
+        const imageUrl = q.image_data 
+          ? `/api/images/question/${q.id}` 
+          : (q.image_url || null);
         return {
           id: q.id,
           content: q.question_text || q.content,
-          image_url: q.image_url,
+          image_url: imageUrl,
           correct_answer: q.correct_answer
         };
       } else if (category === 'normal') {
+        const imageUrl = q.image_data 
+          ? `/api/images/question/${q.id}` 
+          : (q.image_url || null);
         return {
           id: q.id,
           content: q.question_text || q.content,
-          image_url: q.image_url,
+          image_url: imageUrl,
           correct_answer: q.correct_answer,
           options: q.options || [] // 선택지 추가
         };
       } else if (category === 'worldcup') {
+        const imageUrl = q.image_data 
+          ? `/api/images/worldcup/${q.id}` 
+          : (q.image_url || null);
         return {
           id: q.id,
           content: q.name,
-          image_url: q.image_url
+          image_url: imageUrl
         };
       } else if (category === 'balance') {
+        const imageAUrl = q.image_a_data 
+          ? `/api/images/balance_a/${q.id}` 
+          : (q.image_a_url || null);
+        const imageBUrl = q.image_b_data 
+          ? `/api/images/balance_b/${q.id}` 
+          : (q.image_b_url || null);
         return {
           id: q.id,
           content: q.content || '',
           choice_a: q.option_a,
-          choice_b: q.option_b
+          choice_b: q.option_b,
+          image_a_url: imageAUrl,
+          image_b_url: imageBUrl
         };
       }
       return q;
