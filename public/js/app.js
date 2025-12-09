@@ -49,6 +49,7 @@
             }
             
             if (id === 'stats' || id === 'stats-page') {
+                console.log('📊 통계 페이지로 이동, renderStats() 호출');
                 renderStats();
             }
         }
@@ -667,8 +668,10 @@
             if(!input.trim()) return alert("답을 입력해주세요!");
 
             const q = normalState.questions[normalState.index];
-            const correct = q.content.replace(/\s+/g, '').toLowerCase(); 
-            const user = input.replace(/\s+/g, '').toLowerCase();
+            // 모든 공백 문자 제거 (띄어쓰기, 탭, 줄바꿈 등) 후 소문자 변환
+            const normalize = (str) => str.replace(/\s+/g, '').toLowerCase().trim();
+            const correct = normalize(q.content || '');
+            const user = normalize(input);
 
             if(correct === user) {
                 alert("정답입니다! ⭕");
@@ -727,6 +730,10 @@
                 
                 saveStats({ title: currentQuiz.title, correct: correct, total: total, ts: Date.now() });
 
+                // 현재 퀴즈의 통계만 계산
+                const p = percent(correct, total);
+                const g = gradeByPercent(p);
+
                 wrapper.innerHTML = `
                     <section class="panel">
                         <h1 class="page-title">결과</h1>
@@ -734,32 +741,32 @@
                         <div class="stats-grid">
                             <div class="stat-card">
                                 <div class="stat-title">정답 수</div>
-                                <div class="stat-value" id="stat-correct">0</div>
-                                <div class="subtitle" id="stat-total">전체 0문제</div>
+                                <div class="stat-value">${correct}</div>
+                                <div class="subtitle">전체 ${total}문제</div>
                             </div>
                             <div class="stat-card">
                                 <div class="stat-title">정답률</div>
-                                <div class="stat-value"><span id="stat-percent">0</span>%</div>
-                                <div class="progress"><div id="stat-bar" class="progress-bar" style="width:0%"></div></div>
+                                <div class="stat-value"><span>${p}</span>%</div>
+                                <div class="progress"><div class="progress-bar" style="width:${p}%"></div></div>
                             </div>
                             <div class="stat-card">
                                 <div class="stat-title">등급</div>
-                                <div class="stat-value"><span id="stat-grade" class="grade-badge grade-F">F</span></div>
-                                <div class="subtitle" id="stat-grade-text"></div>
+                                <div class="stat-value"><span class="grade-badge grade-${g}">${g}</span></div>
+                                <div class="subtitle">${gradeText(g)}</div>
                             </div>
                         </div>
                         <div class="recent">
                             <div class="recent-head"><div>일시</div><div>퀴즈 제목</div><div>결과</div><div>정답률</div></div>
-                            <div id="recent-container"></div>
-                            <div class="recent-actions">
-                                <button class="btn btn-outline" onclick="clearStats()">기록 초기화</button>
-                                <button class="btn btn-primary" onclick="showPage('stats')" style="margin-left:10px;">전체 통계 보기</button>
+                            <div class="recent-row">
+                                <div>${new Date().toLocaleDateString()}<br><span style="color:#adb5bd">${new Date().toLocaleTimeString()}</span></div>
+                                <div>${escapeHtml(currentQuiz.title || '퀴즈')}</div>
+                                <div>${correct}/${total}</div>
+                                <div>${p}%</div>
                             </div>
                         </div>
                         <button class="submit-btn" style="margin-top:20px;" onclick="showPage('home')">메인으로 돌아가기</button>
                     </section>
                 `;
-                renderStats();
             } 
             else if (currentQuiz.category === 'balance') {
                 const total = normalState.questions.length;
@@ -771,7 +778,6 @@
                         <div class="simple-result-desc">
                             모든 문제를 완료했습니다.
                         </div>
-                        <button class="btn btn-primary" onclick="showPage('stats')" style="margin-bottom:10px;">통계 보기</button>
                         <button class="submit-btn" onclick="showPage('home')">메인으로 돌아가기</button>
                     </div>
                 `;
@@ -779,13 +785,14 @@
                 const total = normalState.questions.length;
                 const correct = normalState.score;
                 saveStats({ title: currentQuiz.title, correct: correct, total: total, ts: Date.now() });
+                const p = percent(correct, total);
+                const g = gradeByPercent(p);
                 wrapper.innerHTML = `
                     <div class="form-container simple-result-container">
                         <span class="result-icon" style="font-size: 50px;">📊</span>
                         <h2 class="page-title">결과</h2>
                         <div class="simple-result-score">${correct} / ${total}</div>
-                        <div class="simple-result-desc">정답률: ${percent(correct, total)}%</div>
-                        <button class="btn btn-primary" onclick="showPage('stats')" style="margin-bottom:10px;">통계 보기</button>
+                        <div class="simple-result-desc">정답률: ${p}% | 등급: <span class="grade-badge grade-${g}">${g}</span></div>
                         <button class="submit-btn" onclick="showPage('home')">메인으로 돌아가기</button>
                     </div>
                 `;
@@ -793,7 +800,6 @@
                 wrapper.innerHTML = `
                     <div class="form-container">
                         <h2 class="page-title">완료</h2>
-                        <button class="btn btn-primary" onclick="showPage('stats')" style="margin-bottom:10px;">통계 보기</button>
                         <button class="submit-btn" onclick="showPage('home')">홈으로</button>
                     </div>
                 `;
@@ -802,13 +808,16 @@
         
         function renderStats(){
             const list = loadStats();
+            console.log('📊 renderStats() 호출됨, 기록 수:', list.length);
             let total=0, correct=0;
             list.forEach(it => { total += (it.total||0); correct += (it.correct||0); });
             const p = percent(correct,total); const g = gradeByPercent(p);
+            console.log('📊 통계 계산:', { total, correct, percent: p, grade: g });
             
             // 통계 페이지용
             const statCorrectEl = document.getElementById('stat-correct');
             if(statCorrectEl) {
+                console.log('✅ 통계 페이지 요소 찾음');
                 statCorrectEl.innerText = String(correct);
                 const statTotalEl = document.getElementById('stat-total');
                 if(statTotalEl) statTotalEl.innerText = `전체 ${total}문제`;
