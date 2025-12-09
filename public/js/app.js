@@ -29,7 +29,7 @@
 
         /* 1. 페이지 네비게이션 */
         function showPage(id) {
-            const pages = ['home-page','create-page','login-page','play-page','result-page','select-count-page'];
+            const pages = ['home-page','create-page','login-page','play-page','result-page','select-count-page','admin-page'];
             pages.forEach(p => {
                 const el = document.getElementById(p);
                 if(el) el.classList.add('hidden');
@@ -40,7 +40,7 @@
             window.scrollTo(0, 0);
             
             if (id === 'home' || id === 'home-page') {
-                fetchQuizzes();
+                checkLogin().then(() => fetchQuizzes()); // 로그인 상태 확인 후 퀴즈 로드
                 // 필터는 fetchQuizzes 내부에서 applyFilters()를 호출하므로 여기서는 호출하지 않음
             }
             
@@ -132,6 +132,7 @@
         window.changeCategory = changeCategory;
         window.removeQuestion = removeQuestion;
         window.prepareQuiz = prepareQuiz;
+        window.selectNormalAnswer = selectNormalAnswer;
         
         function renderQuizzes(list) {
             const grid = document.getElementById('quiz-grid');
@@ -146,7 +147,11 @@
                 const div = document.createElement('div');
                 div.className = 'card';
                 div.setAttribute('data-category', quiz.category);
-                div.onclick = () => prepareQuiz(quiz);
+                div.onclick = (e) => {
+                    // 삭제 버튼 클릭 시에는 카드 클릭 이벤트 발생하지 않도록
+                    if (e.target.closest('.delete-btn')) return;
+                    prepareQuiz(quiz);
+                };
 
                 let bgClass = 'bg-normal';
                 if(quiz.category === 'worldcup') bgClass = 'bg-worldcup';
@@ -154,8 +159,16 @@
                 else if(quiz.category === 'balance') bgClass = 'bg-balance';
 
                 const imgTag = quiz.image_url ? `<img src="${API_BASE}${quiz.image_url}" onerror="this.style.display='none'">` : '';
+                
+                // 관리자일 때 삭제 버튼 추가
+                const isAdmin = currentUser && (currentUser.is_admin === true || currentUser.is_admin === 'true');
+                console.log(`퀴즈 ${quiz.id} 렌더링 - currentUser:`, currentUser, 'isAdmin:', isAdmin);
+                const deleteBtn = isAdmin
+                    ? `<button class="delete-btn" onclick="event.stopPropagation(); deleteQuizFromHome(${quiz.id}, '${escapeHtml(quiz.title)}')" style="position: absolute; top: 10px; right: 10px; background: #ff6b6b; color: white; border: none; border-radius: 6px; padding: 6px 12px; font-size: 12px; cursor: pointer; z-index: 10; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">삭제</button>`
+                    : '';
 
                 div.innerHTML = `
+                    ${deleteBtn}
                     <div class="thumb ${bgClass}">
                         ${imgTag}
                         <div class="play-icon"><svg viewBox="0 0 24 24"><path d="M8 5v14l11-7z"></path></svg></div>
@@ -163,7 +176,11 @@
                     <div class="info">
                         <div class="card-title">${quiz.title}</div>
                         <div class="card-desc">${quiz.description || ''}</div>
-                        <div class="card-footer"><div class="user-avatar"></div><span>참여자 ${quiz.play_count || 0}</span></div>
+                        <div class="card-footer">
+                            <div class="user-avatar"></div>
+                            <span>만든이: ${quiz.creator_name || '익명'}</span>
+                            ${quiz.play_count > 0 ? `<span style="margin-left: 8px; color: #adb5bd;">· 참여 ${quiz.play_count}명</span>` : ''}
+                        </div>
                     </div>
                 `;
                 grid.appendChild(div);
@@ -247,6 +264,9 @@
             } else if (currentCreateCategory === 'balance') {
                 document.getElementById('section-title').innerText = '밸런스 문항 작성';
                 btn.innerText = '+ 문항 추가하기';
+            } else if (currentCreateCategory === 'machugi') {
+                document.getElementById('section-title').innerText = '마추기 문제 작성';
+                btn.innerText = '+ 문제 추가하기';
             } else {
                 document.getElementById('section-title').innerText = '문제 출제';
                 btn.innerText = '+ 문제 추가하기';
@@ -260,7 +280,7 @@
             let html = '';
 
             if (currentCreateCategory === 'normal') {
-                // [수정됨] 일반 퀴즈: 이미지 업로드 필드 추가 및 레이아웃 개선
+                // 일반 퀴즈: 선택지 있는 문제
                 html = `
                 <div class="question-item">
                     <div class="question-header">
@@ -268,16 +288,47 @@
                         <span class="btn-remove" onclick="removeQuestion(this)">삭제</span>
                     </div>
                     <div class="form-group">
-                        <label class="form-label">문제 이미지 (필수)</label>
-                        <input type="file" class="form-input" accept="image/*" style="background: white;">
-                    </div>
-                    <div class="form-group">
                         <label class="form-label">질문 내용</label>
-                        <input type="text" class="form-input" placeholder="예: 이 캐릭터의 이름은?">
+                        <input type="text" class="form-input" placeholder="예: 대한민국의 수도는?">
                     </div>
                     <div class="form-group">
-                        <label class="form-label">정답</label>
-                        <input type="text" class="form-input" placeholder="정답을 입력하세요">
+                        <label class="form-label">선택지 1 (정답)</label>
+                        <input type="text" class="form-input" placeholder="정답">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">선택지 2</label>
+                        <input type="text" class="form-input" placeholder="오답">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">선택지 3</label>
+                        <input type="text" class="form-input" placeholder="오답">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">선택지 4</label>
+                        <input type="text" class="form-input" placeholder="오답">
+                    </div>
+                </div>`;
+            } else if (currentCreateCategory === 'machugi') {
+                // 마추기: 이미지 보고 이름 맞추기
+                html = `
+                <div class="question-item">
+                    <div class="question-header">
+                        <span class="question-number">Q${count}.</span>
+                        <span class="btn-remove" onclick="removeQuestion(this)">삭제</span>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">이미지 (필수)</label>
+                        <input type="file" class="form-input" accept="image/*" style="background: white;">
+                        <small style="color: #868e96; font-size: 12px; margin-top: 4px; display: block;">
+                            캐릭터, 인물, 사물 등의 이미지를 업로드하세요
+                        </small>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">정답 (이름)</label>
+                        <input type="text" class="form-input" placeholder="예: 뽀로로, 아이유, 에펠탑 등">
+                        <small style="color: #868e96; font-size: 12px; margin-top: 4px; display: block;">
+                            플레이어가 입력해야 할 정답을 입력하세요
+                        </small>
                     </div>
                 </div>`;
             } else if (currentCreateCategory === 'balance') {
@@ -307,16 +358,30 @@
                 
                 for (let item of questionItems) {
                     if (category === 'normal') {
-                        const questionText = item.querySelectorAll('.form-input')[1]?.value || '';
-                        const correctAnswer = item.querySelectorAll('.form-input')[2]?.value || '';
-                        const fileInput = item.querySelector('input[type="file"]');
-                        const options = []; // 선택지 입력 필드가 필요하면 추가
+                        const inputs = item.querySelectorAll('.form-input');
+                        const questionText = inputs[0]?.value || '';
+                        const options = [];
+                        for (let i = 1; i < 5; i++) {
+                            if (inputs[i]?.value) options.push(inputs[i].value);
+                        }
                         
-                        // 이미지 업로드는 추후 구현 (현재는 URL만 저장)
                         questions.push({
                             question_text: questionText,
-                            correct_answer: parseInt(correctAnswer) || 0,
-                            options: ['선택지1', '선택지2', '선택지3', '선택지4'] // 임시
+                            correct_answer: 0, // 첫 번째 선택지가 정답
+                            options: options
+                        });
+                    } else if (category === 'machugi') {
+                        // 마추기: 이미지 파일 + 정답 텍스트
+                        const inputs = item.querySelectorAll('.form-input');
+                        const fileInput = item.querySelector('input[type="file"]');
+                        const answerText = inputs[1]?.value || ''; // 정답 입력 필드
+                        
+                        // 이미지 업로드는 추후 구현 (현재는 URL만 저장)
+                        // TODO: 실제 파일 업로드 구현 필요
+                        questions.push({
+                            content: answerText, // 정답이 content에 저장됨
+                            image_url: null, // 파일 업로드 구현 후 URL로 변경
+                            correct_answer: null // 마추기는 correct_answer 불필요
                         });
                     } else if (category === 'balance') {
                         const inputs = item.querySelectorAll('.form-input');
@@ -367,14 +432,36 @@
             try {
                 const res = await fetch(`${API_BASE}/api/check-login`,{credentials:'include'});
                 const d = await res.json();
+                if(d.loggedIn && d.user) {
+                    currentUser = d.user; // 현재 사용자 정보 저장
+                    console.log('✅ 로그인 상태:', currentUser);
+                    console.log('   is_admin:', currentUser.is_admin);
+                } else {
+                    currentUser = null;
+                    console.log('❌ 로그인 안 됨');
+                }
                 updateAuthUI(d.loggedIn);
-            } catch(e){}
+            } catch(e){
+                console.error('로그인 확인 오류:', e);
+                currentUser = null;
+            }
         }
 
         function updateAuthUI(isLoggedIn) {
             if(isLoggedIn) {
                 document.getElementById('auth-guest').classList.add('hidden');
                 document.getElementById('auth-user').classList.remove('hidden');
+                
+                // 관리자 버튼 표시/숨김
+                const adminBtn = document.querySelector('#auth-user button[onclick*="admin"]');
+                if(adminBtn) {
+                    const isAdmin = currentUser && (currentUser.is_admin === true || currentUser.is_admin === 'true');
+                    if(isAdmin) {
+                        adminBtn.style.display = 'inline-block';
+                    } else {
+                        adminBtn.style.display = 'none';
+                    }
+                }
             } else {
                 document.getElementById('auth-guest').classList.remove('hidden');
                 document.getElementById('auth-user').classList.add('hidden');
@@ -435,14 +522,28 @@
                 const res=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify(body)}); 
                 const d=await res.json(); 
                 if(d.success){
-                    if(isSignupMode){alert("가입 성공"); isSignupMode=false; toggleAuthMode();}
-                    else{alert("환영합니다"); updateAuthUI(true); showPage('home');}
+                    if(isSignupMode){
+                        alert("가입 성공"); 
+                        isSignupMode=false; 
+                        toggleAuthMode();
+                    } else {
+                        // 로그인 성공 시 현재 사용자 정보 가져오기
+                        await checkLogin(); // currentUser 설정
+                        alert("환영합니다"); 
+                        showPage('home');
+                    }
                 }else alert(d.message);
             }catch(e){alert("오류");} 
         }
         
         async function handleLogout(){ 
-            try{await fetch(`${API_BASE}/api/logout`,{method:'POST',credentials:'include'}); alert("로그아웃"); updateAuthUI(false); showPage('home');}catch(e){} 
+            try{
+                await fetch(`${API_BASE}/api/logout`,{method:'POST',credentials:'include'}); 
+                currentUser = null; // 사용자 정보 초기화
+                alert("로그아웃"); 
+                updateAuthUI(false); 
+                showPage('home');
+            }catch(e){} 
         }
 
         // 월드컵 로직
@@ -530,6 +631,22 @@
                 `;
                 setTimeout(()=> document.getElementById('answerInput').focus(), 100);
             } 
+            else if(currentQuiz.category === 'normal') {
+                // 일반 퀴즈: 선택지 표시
+                const imgUrl = q.image_url ? `<img src="${API_BASE}${q.image_url}" class="quiz-image">` : '';
+                const options = q.options || [];
+                const optionsHtml = options.map((opt, idx) => 
+                    `<button class="option-btn" onclick="selectNormalAnswer(${idx})">${escapeHtml(opt.text || opt.option_text || '')}</button>`
+                ).join('');
+                
+                con.innerHTML = `
+                    ${imgUrl}
+                    <h2 class="quiz-question">${escapeHtml(q.content)}</h2>
+                    <div class="quiz-options">
+                        ${optionsHtml}
+                    </div>
+                `;
+            }
             else if(currentQuiz.category === 'balance') {
                 con.innerHTML = `<h2 class="quiz-question">${q.content}</h2>`;
                 con.innerHTML += `
@@ -561,6 +678,21 @@
                 normalState.index++;
                 renderNormalQuestion();
             }
+        }
+
+        function selectNormalAnswer(selectedIdx) {
+            const q = normalState.questions[normalState.index];
+            const correctIdx = q.correct_answer !== undefined ? q.correct_answer : (q.options && q.options.findIndex(opt => opt.order === 0));
+            
+            if(selectedIdx === correctIdx) {
+                alert("정답입니다! ⭕");
+                normalState.score++;
+            } else {
+                const correctText = q.options && q.options[correctIdx] ? q.options[correctIdx].text || q.options[correctIdx].option_text : '정답';
+                alert(`틀렸습니다! ❌ (정답: ${correctText})`);
+            }
+            normalState.index++;
+            renderNormalQuestion();
         }
 
         function nextNormal(choice) { 
@@ -688,3 +820,115 @@
             renderQuizzes(f); 
         }
         document.getElementById('search-input')?.addEventListener('input', applyFilters);
+
+        /* 4. 관리자 페이지 */
+        let isAdminLoggedIn = false;
+
+        async function adminLogin() {
+            const username = document.getElementById('admin-username').value;
+            const password = document.getElementById('admin-password').value;
+            
+            if(username === 'asdf' && password === 'asdf') {
+                isAdminLoggedIn = true;
+                document.getElementById('admin-login-section').classList.add('hidden');
+                document.getElementById('admin-content-section').classList.remove('hidden');
+                await loadAdminQuizList();
+            } else {
+                alert('관리자 아이디 또는 비밀번호가 틀렸습니다.');
+            }
+        }
+
+        function adminLogout() {
+            isAdminLoggedIn = false;
+            document.getElementById('admin-login-section').classList.remove('hidden');
+            document.getElementById('admin-content-section').classList.add('hidden');
+            document.getElementById('admin-username').value = '';
+            document.getElementById('admin-password').value = '';
+        }
+
+        async function loadAdminQuizList() {
+            try {
+                const res = await fetch(`${API_BASE}/api/quizzes`);
+                const data = await res.json();
+                const quizzes = data.success ? data.quizzes : data;
+                
+                const listEl = document.getElementById('admin-quiz-list');
+                if(quizzes.length === 0) {
+                    listEl.innerHTML = '<p style="text-align: center; color: #868e96; padding: 40px;">등록된 퀴즈가 없습니다.</p>';
+                    return;
+                }
+                
+                listEl.innerHTML = quizzes.map(quiz => `
+                    <div style="background: white; border: 1px solid #e9ecef; border-radius: 12px; padding: 20px; margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-weight: 700; font-size: 16px; margin-bottom: 5px;">${escapeHtml(quiz.title)}</div>
+                            <div style="font-size: 13px; color: #868e96;">
+                                카테고리: ${quiz.category} | 
+                                만든이: ${quiz.creator_name || '익명'} | 
+                                참여: ${quiz.play_count || 0}명
+                            </div>
+                        </div>
+                        <button class="btn" style="background: #ff6b6b; color: white; margin-left: 15px;" onclick="deleteQuiz(${quiz.id}, '${escapeHtml(quiz.title)}')">삭제</button>
+                    </div>
+                `).join('');
+            } catch(e) {
+                console.error('관리자 퀴즈 목록 로드 오류:', e);
+                alert('퀴즈 목록을 불러올 수 없습니다.');
+            }
+        }
+
+        // 메인 페이지에서 퀴즈 삭제
+        async function deleteQuizFromHome(quizId, quizTitle) {
+            if(!confirm(`정말로 "${quizTitle}" 퀴즈를 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.`)) {
+                return;
+            }
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/quizzes/${quizId}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
+                const data = await res.json();
+                
+                if(data.success) {
+                    alert('퀴즈가 삭제되었습니다.');
+                    await fetchQuizzes(); // 메인 페이지 퀴즈 목록 새로고침
+                } else {
+                    alert('삭제 실패: ' + (data.message || '알 수 없는 오류'));
+                }
+            } catch(e) {
+                console.error('퀴즈 삭제 오류:', e);
+                alert('삭제 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 관리자 페이지에서 퀴즈 삭제
+        async function deleteQuiz(quizId, quizTitle) {
+            if(!confirm(`정말로 "${quizTitle}" 퀴즈를 삭제하시겠습니까?\n\n이 작업은 되돌릴 수 없습니다.`)) {
+                return;
+            }
+            
+            try {
+                const res = await fetch(`${API_BASE}/api/quizzes/${quizId}`, {
+                    method: 'DELETE',
+                    credentials: 'include'
+                });
+                const data = await res.json();
+                
+                if(data.success) {
+                    alert('퀴즈가 삭제되었습니다.');
+                    await loadAdminQuizList();
+                } else {
+                    alert('삭제 실패: ' + (data.message || '알 수 없는 오류'));
+                }
+            } catch(e) {
+                console.error('퀴즈 삭제 오류:', e);
+                alert('삭제 중 오류가 발생했습니다.');
+            }
+        }
+
+        // 전역 함수로 노출
+        window.adminLogin = adminLogin;
+        window.adminLogout = adminLogout;
+        window.deleteQuiz = deleteQuiz;
+        window.deleteQuizFromHome = deleteQuizFromHome;

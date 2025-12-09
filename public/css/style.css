@@ -54,6 +54,7 @@ header {
     background: white; border-radius: 16px; overflow: hidden;
     box-shadow: 0 4px 12px rgba(0,0,0,0.04); cursor: pointer;
     display: flex; flex-direction: column; transition: transform 0.2s; border: 1px solid #f1f3f5;
+    position: relative; /* 삭제 버튼 위치 기준 */
 }
 .card:hover { transform: translateY(-6px); box-shadow: 0 12px 24px rgba(0,0,0,0.08); }
 .thumb {

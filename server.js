@@ -15,6 +15,24 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// 간단 요청 로거 (개발용)
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  console.log(`\n[REQ] ${req.method} ${req.originalUrl}`);
+  if (Object.keys(req.query || {}).length) {
+    console.log('     query :', req.query);
+  }
+  if (Object.keys(req.body || {}).length) {
+    console.log('     body  :', req.body);
+  }
+  res.on('finish', () => {
+    const ms = Date.now() - startedAt;
+    console.log(`[RES] ${req.method} ${req.originalUrl} -> ${res.statusCode} (${ms}ms)`);
+  });
+  next();
+});
+
 app.use(express.static(path.join(__dirname)));
 app.use(express.static(path.join(__dirname, 'public'))); // public 폴더 정적 파일 서빙
 app.use(express.static(path.join(__dirname, '마추기', 'public'))); // 마추기 폴더의 이미지 (하위 호환)
@@ -38,6 +56,7 @@ app.get('/api/quizzes', async (req, res) => {
   try {
     const { category, sort = 'latest' } = req.query;
     
+    console.log('[API] GET /api/quizzes', { category, sort });
     // 마추기 폴더 호환성을 위한 간단한 쿼리
     try {
       let query = `
@@ -63,14 +82,29 @@ app.get('/api/quizzes', async (req, res) => {
       }
       
       const result = await pool.query(query, params);
+      console.log(`     -> quizzes rows: ${result.rows.length}`);
       res.json({ success: true, quizzes: result.rows });
     } catch (dbError) {
-      // 테이블이 없으면 빈 배열 반환
-      console.log('테이블이 아직 생성되지 않았습니다. 빈 배열을 반환합니다.');
+      // DB 연결 오류 처리
+      console.error('     !! /api/quizzes DB 에러:', dbError.message);
+      console.error('     에러 타입:', dbError.code);
+      
+      // 연결 타임아웃이나 연결 오류인 경우
+      if (dbError.code === 'ETIMEDOUT' || dbError.message.includes('timeout') || dbError.message.includes('Connection terminated')) {
+        console.error('     -> DB 연결 타임아웃 발생. 연결을 재시도합니다...');
+        // 연결 풀에서 문제가 있는 클라이언트 제거
+        try {
+          await pool.query('SELECT 1'); // 간단한 쿼리로 연결 테스트
+        } catch (retryError) {
+          console.error('     -> 재연결 실패:', retryError.message);
+        }
+      }
+      
+      // 테이블이 없거나 연결 오류인 경우 빈 배열 반환
       res.json({ success: true, quizzes: [] });
     }
   } catch (error) {
-    console.error('퀴즈 목록 조회 오류:', error);
+    console.error('!! 퀴즈 목록 조회 오류:', error);
     res.json({ success: false, message: '목록 로딩 실패' });
   }
 });
@@ -81,6 +115,8 @@ app.get('/api/quizzes/:id', async (req, res) => {
     const { id } = req.params;
     const quizType = req.query.type || 'normal';
     
+    console.log('[API] GET /api/quizzes/:id', { id, quizType });
+
     // 퀴즈 기본 정보
     const quizResult = await pool.query(
       'SELECT * FROM quizzes WHERE id = $1',
@@ -88,6 +124,7 @@ app.get('/api/quizzes/:id', async (req, res) => {
     );
     
     if (quizResult.rows.length === 0) {
+      console.log('     -> 해당 ID의 퀴즈 없음');
       return res.status(404).json({ error: '퀴즈를 찾을 수 없습니다.' });
     }
     
@@ -126,9 +163,10 @@ app.get('/api/quizzes/:id', async (req, res) => {
       questions = pResult.rows;
     }
     
+    console.log(`     -> questions rows: ${questions.length}`);
     res.json({ ...quiz, questions });
   } catch (error) {
-    console.error('퀴즈 상세 조회 오류:', error);
+    console.error('!! 퀴즈 상세 조회 오류:', error);
     res.status(500).json({ error: '서버 오류가 발생했습니다.' });
   }
 });
@@ -138,11 +176,19 @@ app.post('/api/quizzes', async (req, res) => {
   try {
     const { title, description, category, questions, creator_id } = req.body;
     
+    // 세션에서 사용자 정보 가져오기 (creator_id가 없으면)
+    let finalCreatorId = creator_id;
+    if (!finalCreatorId && req.session.user) {
+      finalCreatorId = req.session.user.id;
+    }
+    
+    console.log('[API] POST /api/quizzes', { title, category, creator_id: finalCreatorId, sessionUser: req.session.user?.id });
+    
     // 퀴즈 생성
     const quizResult = await pool.query(
       `INSERT INTO quizzes (title, description, category, creator_id)
        VALUES ($1, $2, $3, $4) RETURNING *`,
-      [title, description, category, creator_id || null]
+      [title, description, category, finalCreatorId || null]
     );
     
     const quizId = quizResult.rows[0].id;
@@ -169,6 +215,16 @@ app.post('/api/quizzes', async (req, res) => {
             );
           }
         }
+      }
+    } else if (category === 'machugi' && questions) {
+      // 마추기: questions 테이블에 저장 (이미지 + 정답)
+      for (let i = 0; i < questions.length; i++) {
+        const q = questions[i];
+        await pool.query(
+          `INSERT INTO questions (quiz_id, content, image_url, question_order)
+           VALUES ($1, $2, $3, $4)`,
+          [quizId, q.content || q.question_text || '', q.image_url || null, i + 1]
+        );
       }
     } else if (category === 'worldcup' && questions) {
       for (let i = 0; i < questions.length; i++) {
@@ -206,7 +262,32 @@ app.post('/api/quizzes', async (req, res) => {
   }
 });
 
-// 4. 퀴즈 결과 저장
+// 4. 퀴즈 삭제 (관리자용)
+app.delete('/api/quizzes/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // 관리자 인증 (간단하게 세션 확인 또는 추후 JWT로 변경)
+    // TODO: 실제 관리자 인증 로직 추가
+    
+    console.log('[API] DELETE /api/quizzes/:id', { id });
+    
+    // 퀴즈 삭제 (CASCADE로 관련 데이터도 함께 삭제됨)
+    const result = await pool.query('DELETE FROM quizzes WHERE id = $1 RETURNING id, title', [id]);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ success: false, message: '퀴즈를 찾을 수 없습니다.' });
+    }
+    
+    console.log(`     -> 퀴즈 삭제됨: ${result.rows[0].title}`);
+    res.json({ success: true, message: '퀴즈가 삭제되었습니다.' });
+  } catch (error) {
+    console.error('!! 퀴즈 삭제 오류:', error);
+    res.status(500).json({ success: false, message: '서버 오류가 발생했습니다.' });
+  }
+});
+
+// 5. 퀴즈 결과 저장
 app.post('/api/quizzes/:id/results', async (req, res) => {
   try {
     const { id } = req.params;
@@ -372,17 +453,31 @@ app.get('/api/quiz/:id/questions', async (req, res) => {
   const quizId = req.params.id;
   const count = req.query.count; 
   try {
+    console.log('[API] GET /api/quiz/:id/questions', { quizId, count });
     // 먼저 퀴즈 카테고리 확인
     const quizResult = await pool.query('SELECT category FROM quizzes WHERE id = $1', [quizId]);
     if (quizResult.rows.length === 0) {
+      console.log('     -> 퀴즈 없음');
       return res.json({ success: false, message: "퀴즈를 찾을 수 없습니다." });
     }
     
     const category = quizResult.rows[0].category;
+    console.log('     quiz category =', category);
     let query, params;
     
-    if (category === 'machugi' || category === 'normal') {
+    if (category === 'machugi') {
       query = 'SELECT * FROM questions WHERE quiz_id = $1 ORDER BY RANDOM()';
+      params = [quizId];
+    } else if (category === 'normal') {
+      // normal 퀴즈는 옵션도 함께 가져오기
+      query = `
+        SELECT q.*, 
+               (SELECT json_agg(json_build_object('text', o.option_text, 'order', o.option_order) ORDER BY o.option_order)
+                FROM options o WHERE o.question_id = q.id) as options
+        FROM questions q 
+        WHERE q.quiz_id = $1 
+        ORDER BY RANDOM()
+      `;
       params = [quizId];
     } else if (category === 'worldcup') {
       query = 'SELECT * FROM worldcup_candidates WHERE quiz_id = $1 ORDER BY RANDOM()';
@@ -400,16 +495,27 @@ app.get('/api/quiz/:id/questions', async (req, res) => {
       params.push(parseInt(count));
     }
     
+    console.log('     query  =', query);
+    console.log('     params =', params);
     const result = await pool.query(query, params);
+    console.log('     -> raw rows:', result.rows.length);
     
     // 마추기 폴더 형식에 맞게 변환
     const questions = result.rows.map(q => {
-      if (category === 'machugi' || category === 'normal') {
+      if (category === 'machugi') {
         return {
           id: q.id,
           content: q.question_text || q.content,
           image_url: q.image_url,
           correct_answer: q.correct_answer
+        };
+      } else if (category === 'normal') {
+        return {
+          id: q.id,
+          content: q.question_text || q.content,
+          image_url: q.image_url,
+          correct_answer: q.correct_answer,
+          options: q.options || [] // 선택지 추가
         };
       } else if (category === 'worldcup') {
         return {
@@ -428,9 +534,10 @@ app.get('/api/quiz/:id/questions', async (req, res) => {
       return q;
     });
     
+    console.log('     -> mapped questions:', questions.length);
     res.json({ success: true, questions });
   } catch (err) {
-    console.error('문제 로딩 오류:', err);
+    console.error('!! 문제 로딩 오류:', err);
     res.json({ success: false, message: "문제 로딩 실패" });
   }
 });

@@ -12,7 +12,8 @@ const pool = new Pool({
   },
   max: 20, // 최대 연결 수
   idleTimeoutMillis: 30000,
-  connectionTimeoutMillis: 2000,
+  connectionTimeoutMillis: 10000, // 10초로 증가 (AWS RDS 네트워크 지연 고려)
+  statement_timeout: 30000, // 쿼리 타임아웃 30초
 });
 
 // 연결 테스트
